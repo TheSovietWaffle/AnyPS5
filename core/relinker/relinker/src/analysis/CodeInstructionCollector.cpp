@@ -48,9 +48,8 @@ std::set<Domain::VirtualAddress> CodeInstructionCollector::Collect(const std::ve
     const auto fileOffset = [&](std::uint64_t address, std::uint64_t size) {
         for (const auto& header : headers) {
             if (header.Type != 1 || address < header.MappedAddress || address - header.MappedAddress > header.FileSize || size > header.FileSize - (address - header.MappedAddress)) continue;
-            const auto offset = header.Offset + address - header.MappedAddress;
-            range(offset, size);
-            return offset;
+            range(header.Offset, address - header.MappedAddress + size);
+            return header.Offset + address - header.MappedAddress;
         }
         throw Domain::RelinkerException("Code analysis: unmapped address", address);
     };
