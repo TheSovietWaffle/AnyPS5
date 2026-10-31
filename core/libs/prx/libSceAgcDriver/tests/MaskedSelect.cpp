@@ -1269,12 +1269,20 @@ int main() {
     passed &= run("an optional wave body may merge a lane's own bit of the predicate's ballot with the skipped predicate", [&] { return optionalPredicateBody(false); });
     passed &= run("an optional wave body cannot merge a value that differs from the skipped predicate on inactive lanes", [&] { return !optionalPredicateBody(true); });
 
-    const auto optionalBallotWords = [&](bool keepsActive) {
+    enum class BodyLanes { OwnBits, SameLanes, SameLanesCovered, OtherLanes };
+    const auto optionalBallotWords = [&](bool keepsActive, BodyLanes shape = BodyLanes::OwnBits) {
         Builder b;
         b.program.Resources().stage = IrShaderStage::Pixel;
         auto& entry = *b.block;
         auto& predicate = pixelPredicate(b);
-        const auto [low, high] = b.ballotWords(helperPredicate(b, false));
+        auto& real = helperPredicate(b, false);
+        auto& other = pixelPredicate(b);
+        auto [low, high] = b.ballotWords(real);
+        if (shape == BodyLanes::SameLanesCovered) {
+            const auto [everyLow, everyHigh] = b.ballotWords(b.truth());
+            low = &b.emit(IrOpcode::BitwiseAnd32, IrType::U32, {low, everyLow});
+            high = &b.emit(IrOpcode::BitwiseAnd32, IrType::U32, {everyHigh, high});
+        }
         auto& condition = b.emit(IrOpcode::LogicalNot, IrType::Bool, {&predicate});
         auto& body = b.newBlock();
         auto& merge = b.newBlock();
@@ -1291,7 +1299,7 @@ int main() {
         bodyInfo.terminator.kind = TerminatorKind::Branch;
         bodyInfo.terminator.trueBlock = merge.Id();
         b.block = &body;
-        auto& lanes = b.logicalAnd(b.threadBit(*low, *high), keepsActive ? predicate : b.emit(IrOpcode::LogicalNot, IrType::Bool, {&predicate}));
+        auto& lanes = b.logicalAnd(shape == BodyLanes::OwnBits ? b.threadBit(*low, *high) : shape == BodyLanes::OtherLanes ? other : real, keepsActive ? predicate : b.emit(IrOpcode::LogicalNot, IrType::Bool, {&predicate}));
         const auto [takenLow, takenHigh] = b.ballotWords(lanes);
         b.block = &merge;
         auto& mergedLow = b.phi(IrType::U32, entry, *low);
@@ -1304,6 +1312,10 @@ int main() {
 
     passed &= run("an optional wave body may merge a ballot of the skipped lanes' own mask bits with that mask", [&] { return optionalBallotWords(false); });
     passed &= run("an optional wave body cannot merge a ballot that clears inactive lanes' mask bits", [&] { return !optionalBallotWords(true); });
+    passed &= run("an optional wave body may merge a ballot of the same lanes less the body's with the skipped ballot", [&] { return optionalBallotWords(false, BodyLanes::SameLanes); });
+    passed &= run("an optional wave body may merge that ballot with the skipped ballot under a mask of every lane", [&] { return optionalBallotWords(false, BodyLanes::SameLanesCovered); });
+    passed &= run("an optional wave body cannot merge a ballot of the same lanes and the body's with the skipped ballot", [&] { return !optionalBallotWords(true, BodyLanes::SameLanes); });
+    passed &= run("an optional wave body cannot merge a ballot of other lanes with the skipped ballot", [&] { return !optionalBallotWords(false, BodyLanes::OtherLanes); });
     passed &= run("an optional wave body preserves inactive values consumed only within a lane", [&] { return optionalPixelBody(false); });
     passed &= run("an optional wave body cannot change helper coordinates for later implicit samples", [&] { return !optionalPixelBody(true); });
     passed &= run("an optional wave body cannot change helper coordinates for LOD queries", [&] { return !optionalPixelBody(true, IrOpcode::ImageQueryLod); });

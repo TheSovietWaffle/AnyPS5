@@ -220,6 +220,23 @@ private:
         return ballot->Opcode() == IrOpcode::Ballot && ballot->ArgumentCount() == 1u ? ballot : nullptr;
     }
 
+    bool everyLaneWord(const IrValue* word, std::uint32_t half) const {
+        word = word->Resolve();
+        if (const IrValue* ballot = ballotWord(word, half)) return Boolean(ballot->Argument(0), true);
+        if (word->Opcode() != IrOpcode::CompositeExtractU64 || word->ArgumentCount() != 2u || !Immediate(word->Argument(1), half)) return false;
+        const IrValue* wqm = word->Argument(0)->Resolve();
+        if (wqm->Opcode() != IrOpcode::WqmU64 || wqm->ArgumentCount() != 1u) return false;
+        const IrValue* source = wqm->Argument(0)->Resolve();
+        return source->Opcode() == IrOpcode::CompositeConstructU64 && source->ArgumentCount() == 2u && everyLaneWord(source->Argument(0), 0u) && everyLaneWord(source->Argument(1), 1u);
+    }
+
+    bool ballotOfLanes(const IrValue* word, const IrValue* lanes, std::uint32_t half) const {
+        word = word->Resolve();
+        if (const IrValue* ballot = ballotWord(word, half)) return ballot->Argument(0)->Resolve() == lanes;
+        if (word->Opcode() != IrOpcode::BitwiseAnd32 || word->ArgumentCount() != 2u) return false;
+        return (ballotOfLanes(word->Argument(0), lanes, half) && everyLaneWord(word->Argument(1), half)) || (ballotOfLanes(word->Argument(1), lanes, half) && everyLaneWord(word->Argument(0), half));
+    }
+
     bool maskStable(ReplayMask mask, unsigned depth) {
         if (depth > 128u) return false;
         mask = ReplayMask{mask.low->Resolve(), mask.high->Resolve()};
@@ -509,6 +526,7 @@ private:
                 else continue;
             }
             if (const auto mask = own(lanes); mask && sameValue(half == 0u ? mask->low : mask->high, other)) return true;
+            if (ballotOfLanes(other, lanes, half)) return true;
         }
         if ((value->Opcode() == IrOpcode::SelectU32 || value->Opcode() == IrOpcode::SelectF32 || value->Opcode() == IrOpcode::SelectU1) && value->ArgumentCount() == 3u && (value->Argument(0)->Resolve() == predicate->Resolve() || GuardImplies(program, value->Argument(0), predicate))) return inactiveEquals(value->Argument(2), other, predicate, region, depth + 1u);
         if (value->IsPhi() && region.contains(value->Parent()) && value->ArgumentCount() != 0u && value->ArgumentCount() == value->PhiBlockCount()) {
